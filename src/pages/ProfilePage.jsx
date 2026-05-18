@@ -1,4 +1,5 @@
 import { BellRing, Bolt, ChevronRight, Cpu, Settings, ShieldCheck, UserRound, UsersRound } from 'lucide-react';
+import ileashaProfileImage from '../assets/Ileash _Thakur_Profile Image.png';
 import Toggle from '../components/Toggle';
 import { Link } from 'react-router-dom';
 
@@ -25,9 +26,11 @@ function ProfilePage({ sosTriggered }) {
       <header className="overflow-hidden rounded-b-[2.5rem] bg-pulse-accent px-6 pb-12 pt-6 text-white shadow-glow">
         <div className="flex items-center gap-4">
           <div className="relative">
-            <div className="flex h-16 w-16 items-center justify-center rounded-full border-2 border-white/30 bg-white/10">
-              <UserRound className="h-8 w-8" />
-            </div>
+            <img
+              alt="Ileasha Thakur"
+              className="h-16 w-16 rounded-full border-2 border-white/30 object-cover"
+              src={ileashaProfileImage}
+            />
             <div className="absolute bottom-0 right-0 rounded-full bg-white p-1 text-pulse-accent shadow-md">
               <Settings className="h-3 w-3" />
             </div>

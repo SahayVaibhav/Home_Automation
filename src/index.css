@@ -10,7 +10,7 @@
   }
 
   body {
-    @apply min-h-screen bg-[#ebe5df] font-sans text-pulse-text antialiased;
+    @apply min-h-screen bg-[#F7F5F2] font-sans text-[#1A1A1A] antialiased;
   }
 
   #root {
