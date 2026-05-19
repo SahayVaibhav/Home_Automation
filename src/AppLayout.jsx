@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
   AirVent,
@@ -17,6 +17,15 @@ import {
 import profileImage from './assets/Ileash _Thakur_Profile Image.png';
 import logoImage from './assets/logo.png';
 import viewImage from './assets/view.png';
+import {
+  getLightState,
+  setBrightness,
+  setColor,
+  setScene,
+  TAPO_LIGHT_ENTITY_ID,
+  turnLightOff,
+  turnLightOn,
+} from './services/lightApi';
 
 const navItems = [
   { id: 'home', label: 'Home', icon: House },
@@ -33,6 +42,10 @@ const initialDevices = [
   { id: 'ac', label: 'AC', subtitle: '22°C preset', icon: AirVent, active: false, tone: 'slate' },
   { id: 'sos', label: 'SOS', subtitle: 'Emergency line', icon: AlertTriangle, active: false, tone: 'alert' },
 ];
+
+const apiBaseUrl =
+  import.meta.env.VITE_API_BASE_URL ||
+  `${window.location.protocol}//${window.location.hostname}:3001`;
 
 function BottomNavigation({ activeTab, setActiveTab }) {
   return (
@@ -110,7 +123,7 @@ function HeroCard() {
   );
 }
 
-function DeviceCard({ device, onToggle, onOpenSos }) {
+function DeviceCard({ device, onSelect, onToggle, onOpenSos }) {
   const Icon = device.icon;
   const toneClasses = {
     gold: device.active
@@ -136,6 +149,7 @@ function DeviceCard({ device, onToggle, onOpenSos }) {
     <motion.article
       className={`rounded-[1.8rem] border border-white/70 bg-gradient-to-br p-4 shadow-[0_12px_30px_rgba(66,46,38,0.08)] ${toneClasses[device.tone]}`}
       layout
+      onClick={() => onSelect?.(device.id)}
       transition={{ type: 'spring', stiffness: 320, damping: 28 }}
       whileHover={{ y: -3 }}
       whileTap={{ scale: 0.985 }}
@@ -159,7 +173,10 @@ function DeviceCard({ device, onToggle, onOpenSos }) {
             className={`relative flex h-7 w-12 items-center rounded-full p-1 ${
               device.active ? 'bg-[#1A1A1A]/20' : 'bg-[#1A1A1A]/10'
             }`}
-            onClick={() => onToggle(device.id)}
+            onClick={(event) => {
+              event.stopPropagation();
+              onToggle(device.id);
+            }}
             type="button"
             whileTap={{ scale: 0.96 }}
           >
@@ -182,7 +199,163 @@ function DeviceCard({ device, onToggle, onOpenSos }) {
   );
 }
 
-function HomeScreen({ devices, onOpenSos, onToggle }) {
+function LightControlPanel({
+  busy,
+  error,
+  expanded,
+  lightState,
+  onBrightnessCommit,
+  onExpandToggle,
+  onPowerToggle,
+  onSceneSelect,
+  onPresetSelect,
+}) {
+  const [draftBrightness, setDraftBrightness] = useState(lightState?.brightness ?? 255);
+
+  useEffect(() => {
+    if (typeof lightState?.brightness === 'number') {
+      setDraftBrightness(lightState.brightness);
+    }
+  }, [lightState?.brightness]);
+
+  const presets = [
+    { label: 'Warm', rgb: [255, 183, 94] },
+    { label: 'Red', rgb: [255, 0, 0] },
+    { label: 'Blue', rgb: [0, 102, 255] },
+    { label: 'Purple', rgb: [156, 39, 176] },
+    { label: 'Gold', rgb: [255, 204, 64] },
+    { label: 'White', rgb: [255, 244, 229] },
+  ];
+
+  const scenes = [
+    { label: 'Movie', value: 'movie' },
+    { label: 'Night', value: 'night' },
+    { label: 'Relax', value: 'relax' },
+    { label: 'Party', value: 'party' },
+  ];
+
+  return (
+    <motion.section
+      className="mt-8 rounded-[2rem] border border-white/70 bg-white/72 p-5 shadow-[0_16px_35px_rgba(66,46,38,0.08)] backdrop-blur-xl"
+      initial={{ opacity: 0, y: 16 }}
+      transition={{ duration: 0.35, delay: 0.15 }}
+      whileInView={{ opacity: 1, y: 0 }}
+    >
+      <div className="mb-5 flex items-start justify-between gap-4">
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-[#7E1F25]/55">Lighting</p>
+          <h3 className="mt-1 text-xl font-semibold text-[#1A1A1A]">Real Bulb Controls</h3>
+          <p className="mt-2 text-sm text-[#7B6C63]">
+            {lightState?.alias || TAPO_LIGHT_ENTITY_ID} • {busy ? 'Syncing...' : 'Live connected'}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            className={`relative flex h-8 w-14 items-center rounded-full p-1 ${
+              lightState?.power ? 'bg-[#7E1F25]' : 'bg-[#DCCFC3]'
+            }`}
+            disabled={busy}
+            onClick={onPowerToggle}
+            type="button"
+          >
+            <motion.span
+              className="block h-6 w-6 rounded-full bg-white shadow-md"
+              layout
+              transition={{ type: 'spring', stiffness: 360, damping: 26 }}
+              style={{ x: lightState?.power ? 24 : 0 }}
+            />
+          </button>
+          <button
+            className="rounded-2xl border border-[#E8DED5] bg-[#FCFAF7] px-3 py-2 text-sm font-medium text-[#7E1F25]"
+            onClick={onExpandToggle}
+            type="button"
+          >
+            {expanded ? 'Hide' : 'Expand'}
+          </button>
+        </div>
+      </div>
+
+      {error ? (
+        <div className="mb-4 rounded-2xl border border-[#E7B9BE] bg-[#FFF4F5] px-4 py-3 text-sm text-[#9C2E39]">
+          {error}
+        </div>
+      ) : null}
+
+      {expanded ? (
+        <>
+          <div className="rounded-[1.6rem] bg-[#F8F3EE] px-4 py-4">
+            <div className="mb-3 flex items-center justify-between text-sm">
+              <span className="font-medium text-[#4D4139]">Brightness</span>
+              <span className="font-semibold text-[#7E1F25]">{draftBrightness}</span>
+            </div>
+            <input
+              className="h-2 w-full cursor-pointer appearance-none rounded-full bg-[#E9DED2] accent-[#7E1F25]"
+              disabled={busy}
+              max="255"
+              min="0"
+              onChange={(event) => setDraftBrightness(Number(event.target.value))}
+              onMouseUp={() => onBrightnessCommit(draftBrightness)}
+              onTouchEnd={() => onBrightnessCommit(draftBrightness)}
+              type="range"
+              value={draftBrightness}
+            />
+          </div>
+
+          <div className="mt-5">
+            <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.2em] text-[#7E1F25]/60">Colors</p>
+            <div className="grid grid-cols-3 gap-3">
+              {presets.map((preset) => (
+                <motion.button
+                  key={preset.label}
+                  className="rounded-[1.2rem] border border-[#E8DED5] bg-[#FCFAF7] px-4 py-3 text-sm font-medium text-[#4D4139] shadow-sm"
+                  disabled={busy}
+                  onClick={() => onPresetSelect(preset.rgb, draftBrightness)}
+                  type="button"
+                  whileTap={{ scale: 0.985 }}
+                >
+                  {preset.label}
+                </motion.button>
+              ))}
+            </div>
+          </div>
+
+          <div className="mt-5">
+            <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.2em] text-[#7E1F25]/60">Scenes</p>
+            <div className="grid grid-cols-2 gap-3">
+              {scenes.map((scene) => (
+                <motion.button
+                  key={scene.value}
+                  className="rounded-[1.2rem] border border-[#E8DED5] bg-[#FCFAF7] px-4 py-3 text-sm font-medium text-[#4D4139] shadow-sm"
+                  disabled={busy}
+                  onClick={() => onSceneSelect(scene.value)}
+                  type="button"
+                  whileTap={{ scale: 0.985 }}
+                >
+                  {scene.label}
+                </motion.button>
+              ))}
+            </div>
+          </div>
+        </>
+      ) : null}
+    </motion.section>
+  );
+}
+
+function HomeScreen({
+  devices,
+  lightBusy,
+  lightError,
+  lightExpanded,
+  lightState,
+  onBrightnessCommit,
+  onLightExpandToggle,
+  onLightPowerToggle,
+  onOpenSos,
+  onPresetSelect,
+  onSceneSelect,
+  onToggle,
+}) {
   return (
     <div className="flex-1 overflow-y-auto px-5 pb-28 pt-5">
       <header className="mb-6 flex items-center justify-between">
@@ -216,14 +389,34 @@ function HomeScreen({ devices, onOpenSos, onToggle }) {
                 key={device.id}
                 animate={{ opacity: 1, y: 0 }}
                 initial={{ opacity: 0, y: 18 }}
+                onClick={device.id === 'lights' ? onLightExpandToggle : undefined}
                 transition={{ delay: index * 0.05, duration: 0.35 }}
               >
-                <DeviceCard device={device} onOpenSos={onOpenSos} onToggle={onToggle} />
+                <DeviceCard
+                  device={device}
+                  onOpenSos={onOpenSos}
+                  onSelect={device.id === 'lights' ? onLightExpandToggle : undefined}
+                  onToggle={onToggle}
+                />
               </motion.div>
             ))}
           </AnimatePresence>
         </div>
       </section>
+
+      {lightState ? (
+        <LightControlPanel
+          busy={lightBusy}
+          error={lightError}
+          expanded={lightExpanded}
+          lightState={lightState}
+          onBrightnessCommit={onBrightnessCommit}
+          onExpandToggle={onLightExpandToggle}
+          onPowerToggle={onLightPowerToggle}
+          onPresetSelect={onPresetSelect}
+          onSceneSelect={onSceneSelect}
+        />
+      ) : null}
     </div>
   );
 }
@@ -383,20 +576,165 @@ function ProfileScreen({ onLogout }) {
 function AppLayout({ onLogout }) {
   const [activeTab, setActiveTab] = useState('home');
   const [devices, setDevices] = useState(initialDevices);
+  const [lightExpanded, setLightExpanded] = useState(false);
+  const [lightBusy, setLightBusy] = useState(false);
+  const [lightError, setLightError] = useState('');
+  const [lightState, setLightState] = useState(null);
+
+  const applyLightState = (light) => {
+    setLightState(light);
+    setDevices((current) =>
+      current.map((device) =>
+        device.id === 'lights'
+          ? {
+              ...device,
+              active: light.power,
+              subtitle:
+                typeof light.brightness === 'number'
+                  ? `${light.brightness}% brightness`
+                  : light.online
+                    ? 'Connected live'
+                    : 'Unavailable',
+            }
+          : device,
+      ),
+    );
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadLightState() {
+      try {
+        const light = await getLightState();
+        if (cancelled || !light) {
+          return;
+        }
+        setLightError('');
+        applyLightState(light);
+      } catch {
+        setLightError('Unable to connect to the light service.');
+      }
+    }
+
+    loadLightState();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const screen = useMemo(() => {
     if (activeTab === 'home') {
       return (
         <HomeScreen
           devices={devices}
+          lightBusy={lightBusy}
+          lightError={lightError}
+          lightExpanded={lightExpanded}
+          lightState={lightState}
+          onBrightnessCommit={async (brightness) => {
+            setLightBusy(true);
+            setLightError('');
+            try {
+              const light = await setBrightness(TAPO_LIGHT_ENTITY_ID, brightness);
+              applyLightState(light);
+            } catch (error) {
+              setLightError(error.message || 'Brightness update failed.');
+            } finally {
+              setLightBusy(false);
+            }
+          }}
+          onLightExpandToggle={() => setLightExpanded((current) => !current)}
+          onLightPowerToggle={async () => {
+            setLightBusy(true);
+            setLightError('');
+            try {
+              const light = lightState?.power
+                ? await turnLightOff(TAPO_LIGHT_ENTITY_ID)
+                : await turnLightOn(TAPO_LIGHT_ENTITY_ID);
+              applyLightState(light);
+            } catch (error) {
+              setLightError(error.message || 'Unable to update power state.');
+            } finally {
+              setLightBusy(false);
+            }
+          }}
           onOpenSos={() => setActiveTab('sos')}
-          onToggle={(deviceId) =>
+          onPresetSelect={async (rgb, brightness) => {
+            setLightBusy(true);
+            setLightError('');
+            try {
+              const light = await setColor(TAPO_LIGHT_ENTITY_ID, rgb, brightness);
+              applyLightState(light);
+            } catch (error) {
+              setLightError(error.message || 'Unable to update light color.');
+            } finally {
+              setLightBusy(false);
+            }
+          }}
+          onSceneSelect={async (scene) => {
+            setLightBusy(true);
+            setLightError('');
+            try {
+              const light = await setScene(TAPO_LIGHT_ENTITY_ID, scene);
+              applyLightState(light);
+            } catch (error) {
+              setLightError(error.message || 'Unable to apply the selected scene.');
+            } finally {
+              setLightBusy(false);
+            }
+          }}
+          onToggle={async (deviceId) => {
+            if (deviceId === 'lights') {
+              const currentLight = devices.find((device) => device.id === 'lights');
+              const optimisticPower = !currentLight?.active;
+
+              setDevices((current) =>
+                current.map((device) =>
+                  device.id === 'lights'
+                    ? {
+                        ...device,
+                        active: optimisticPower,
+                        subtitle: optimisticPower ? 'Updating...' : 'Updating...',
+                      }
+                    : device,
+                ),
+              );
+
+              try {
+                setLightBusy(true);
+                setLightError('');
+                const light = optimisticPower
+                  ? await turnLightOn(TAPO_LIGHT_ENTITY_ID)
+                  : await turnLightOff(TAPO_LIGHT_ENTITY_ID);
+                applyLightState(light);
+              } catch (error) {
+                setDevices((current) =>
+                  current.map((device) =>
+                    device.id === 'lights'
+                      ? {
+                          ...device,
+                          active: currentLight?.active ?? false,
+                          subtitle: 'Backend unavailable',
+                        }
+                      : device,
+                  ),
+                );
+                setLightError(error.message || 'Unable to toggle the light.');
+              } finally {
+                setLightBusy(false);
+              }
+
+              return;
+            }
+
             setDevices((current) =>
               current.map((device) =>
                 device.id === deviceId ? { ...device, active: !device.active } : device,
               ),
-            )
-          }
+            );
+          }}
         />
       );
     }
