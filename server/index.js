@@ -8,8 +8,8 @@ import {
   setLightBrightness as setHomeAssistantBrightness,
   setLightColor,
   setLightScene,
-  turnLightOff,
-  turnLightOn,
+  triggerSmoothLightOff,
+  triggerSmoothLightOn,
 } from './homeAssistantClient.js';
 import {
   discoverBulbs,
@@ -26,6 +26,7 @@ dotenv.config();
 
 const app = express();
 const port = Number(process.env.PORT || 3001);
+const colorEntityId = process.env.TAPO_LIGHT_COLOR_ENTITY || 'tapo_l530_light_preset';
 
 app.use(cors());
 app.use(express.json());
@@ -35,11 +36,11 @@ async function getUnifiedLightState(entityId) {
 }
 
 async function turnUnifiedLightOn(entityId) {
-  return hasHomeAssistantConfig() ? turnLightOn(entityId) : toggleLight(true);
+  return hasHomeAssistantConfig() ? triggerSmoothLightOn(entityId) : toggleLight(true);
 }
 
 async function turnUnifiedLightOff(entityId) {
-  return hasHomeAssistantConfig() ? turnLightOff(entityId) : toggleLight(false);
+  return hasHomeAssistantConfig() ? triggerSmoothLightOff(entityId) : toggleLight(false);
 }
 
 async function setUnifiedBrightness(entityId, brightness) {
@@ -211,7 +212,7 @@ app.post('/api/lights/brightness', async (request, response) => {
 
 app.post('/api/lights/color', async (request, response) => {
   try {
-    const entityId = request.body?.entityId || getDefaultLightEntity();
+    const entityId = request.body?.entityId || colorEntityId;
     const rgb = request.body?.rgb;
     const brightness = request.body?.brightness;
 
@@ -232,7 +233,7 @@ app.post('/api/lights/color', async (request, response) => {
 
 app.post('/api/lights/scene', async (request, response) => {
   try {
-    const entityId = request.body?.entityId || getDefaultLightEntity();
+    const entityId = request.body?.entityId || colorEntityId;
     const scene = request.body?.scene;
     const light = await setUnifiedScene(entityId, scene);
     response.json({ light, ok: true });

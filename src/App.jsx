@@ -5,7 +5,7 @@ import Login from './pages/Login';
 import SplashScreen from './pages/SplashScreen';
 
 function App() {
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [isLoggedIn, setIsLoggedIn] = useState(true);
   const [showSplash, setShowSplash] = useState(true);
 
   useEffect(() => {

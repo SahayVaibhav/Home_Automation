@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
   AirVent,
@@ -19,12 +19,16 @@ import logoImage from './assets/logo.png';
 import viewImage from './assets/view.png';
 import {
   getLightState,
+  hexToRgb,
+  rgbToHex,
   setBrightness,
   setColor,
   setScene,
+  TAPO_LIGHT_COLOR_ENTITY_ID,
   TAPO_LIGHT_ENTITY_ID,
   turnLightOff,
   turnLightOn,
+  uiToHaBrightness,
 } from './services/lightApi';
 
 const navItems = [
@@ -46,6 +50,73 @@ const initialDevices = [
 const apiBaseUrl =
   import.meta.env.VITE_API_BASE_URL ||
   `${window.location.protocol}//${window.location.hostname}:3001`;
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function hsvToRgb(hue, saturation, value = 1) {
+  const normalizedHue = ((hue % 360) + 360) % 360;
+  const s = clamp(saturation, 0, 1);
+  const v = clamp(value, 0, 1);
+  const chroma = v * s;
+  const x = chroma * (1 - Math.abs(((normalizedHue / 60) % 2) - 1));
+  const match = v - chroma;
+
+  let red = 0;
+  let green = 0;
+  let blue = 0;
+
+  if (normalizedHue < 60) {
+    red = chroma;
+    green = x;
+  } else if (normalizedHue < 120) {
+    red = x;
+    green = chroma;
+  } else if (normalizedHue < 180) {
+    green = chroma;
+    blue = x;
+  } else if (normalizedHue < 240) {
+    green = x;
+    blue = chroma;
+  } else if (normalizedHue < 300) {
+    red = x;
+    blue = chroma;
+  } else {
+    red = chroma;
+    blue = x;
+  }
+
+  return [red, green, blue].map((channel) => Math.round((channel + match) * 255));
+}
+
+function rgbToHsv(rgb) {
+  if (!Array.isArray(rgb) || rgb.length !== 3) {
+    return { hue: 0, saturation: 0, value: 1 };
+  }
+
+  const [red, green, blue] = rgb.map((channel) => clamp((Number(channel) || 0) / 255, 0, 1));
+  const max = Math.max(red, green, blue);
+  const min = Math.min(red, green, blue);
+  const delta = max - min;
+
+  let hue = 0;
+  if (delta !== 0) {
+    if (max === red) {
+      hue = 60 * (((green - blue) / delta) % 6);
+    } else if (max === green) {
+      hue = 60 * ((blue - red) / delta + 2);
+    } else {
+      hue = 60 * ((red - green) / delta + 4);
+    }
+  }
+
+  return {
+    hue: (hue + 360) % 360,
+    saturation: max === 0 ? 0 : delta / max,
+    value: max,
+  };
+}
 
 function BottomNavigation({ activeTab, setActiveTab }) {
   return (
@@ -205,27 +276,38 @@ function LightControlPanel({
   expanded,
   lightState,
   onBrightnessCommit,
+  onInteractionChange,
   onExpandToggle,
+  onHexColorCommit,
   onPowerToggle,
   onSceneSelect,
-  onPresetSelect,
 }) {
-  const [draftBrightness, setDraftBrightness] = useState(lightState?.brightness ?? 255);
+  const [draftBrightness, setDraftBrightness] = useState(lightState?.brightness ?? 100);
+  const [draftHex, setDraftHex] = useState(lightState?.hex || rgbToHex(lightState?.rgb) || '#c8a46a');
+  const [isDraggingBrightness, setIsDraggingBrightness] = useState(false);
+  const [isPickingColor, setIsPickingColor] = useState(false);
+  const [draftWheel, setDraftWheel] = useState(() => {
+    const { hue, saturation } = rgbToHsv(lightState?.rgb || hexToRgb(draftHex));
+    return { hue, saturation };
+  });
+  const colorWheelRef = useRef(null);
 
   useEffect(() => {
-    if (typeof lightState?.brightness === 'number') {
+    if (!isDraggingBrightness && typeof lightState?.brightness === 'number') {
       setDraftBrightness(lightState.brightness);
     }
-  }, [lightState?.brightness]);
+  }, [isDraggingBrightness, lightState?.brightness]);
 
-  const presets = [
-    { label: 'Warm', rgb: [255, 183, 94] },
-    { label: 'Red', rgb: [255, 0, 0] },
-    { label: 'Blue', rgb: [0, 102, 255] },
-    { label: 'Purple', rgb: [156, 39, 176] },
-    { label: 'Gold', rgb: [255, 204, 64] },
-    { label: 'White', rgb: [255, 244, 229] },
-  ];
+  useEffect(() => {
+    if (!isPickingColor) {
+      const nextHex = lightState?.hex || rgbToHex(lightState?.rgb) || '#c8a46a';
+      const { hue, saturation } = rgbToHsv(lightState?.rgb || hexToRgb(nextHex));
+      setDraftHex(nextHex);
+      setDraftWheel({ hue, saturation });
+    }
+  }, [isPickingColor, lightState?.hex, lightState?.rgb]);
+
+  const previewColor = draftHex || lightState?.hex || '#c8a46a';
 
   const scenes = [
     { label: 'Movie', value: 'movie' },
@@ -233,6 +315,94 @@ function LightControlPanel({
     { label: 'Relax', value: 'relax' },
     { label: 'Party', value: 'party' },
   ];
+
+  const beginBrightnessInteraction = () => {
+    setIsDraggingBrightness(true);
+    onInteractionChange(true);
+  };
+
+  const commitBrightness = async (value) => {
+    try {
+      await onBrightnessCommit(value);
+    } finally {
+      setIsDraggingBrightness(false);
+      onInteractionChange(false);
+    }
+  };
+
+  const beginColorInteraction = () => {
+    setIsPickingColor(true);
+    onInteractionChange(true);
+  };
+
+  const commitColor = async (hex) => {
+    const rgb = hexToRgb(hex);
+
+    if (!rgb) {
+      setIsPickingColor(false);
+      onInteractionChange(false);
+      return;
+    }
+
+    try {
+      await onHexColorCommit(hex, rgb, draftBrightness);
+    } finally {
+      setIsPickingColor(false);
+      onInteractionChange(false);
+    }
+  };
+
+  const updateColorFromPointer = async (event) => {
+    const wheel = colorWheelRef.current;
+    if (!wheel) {
+      return;
+    }
+
+    const rect = wheel.getBoundingClientRect();
+    const radius = rect.width / 2;
+    const centerX = rect.left + radius;
+    const centerY = rect.top + radius;
+    const x = event.clientX - centerX;
+    const y = event.clientY - centerY;
+    const distance = Math.sqrt(x * x + y * y);
+    const saturation = clamp(distance / radius, 0, 1);
+    const hue = ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
+    const rgb = hsvToRgb(hue, saturation, 1);
+    const hex = rgbToHex(rgb);
+
+    setDraftWheel({ hue, saturation });
+    setDraftHex(hex);
+
+    await onHexColorCommit(hex, rgb, draftBrightness);
+  };
+
+  const handleColorWheelPointerDown = async (event) => {
+    event.preventDefault();
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    beginColorInteraction();
+    await updateColorFromPointer(event);
+  };
+
+  const handleColorWheelPointerMove = async (event) => {
+    if (!isPickingColor) {
+      return;
+    }
+
+    event.preventDefault();
+    await updateColorFromPointer(event);
+  };
+
+  const handleColorWheelPointerUp = (event) => {
+    event.preventDefault();
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
+    setIsPickingColor(false);
+    onInteractionChange(false);
+  };
+
+  const wheelIndicatorStyle = {
+    left: `${50 + Math.cos((draftWheel.hue * Math.PI) / 180) * draftWheel.saturation * 50}%`,
+    top: `${50 + Math.sin((draftWheel.hue * Math.PI) / 180) * draftWheel.saturation * 50}%`,
+  };
 
   return (
     <motion.section
@@ -286,16 +456,20 @@ function LightControlPanel({
           <div className="rounded-[1.6rem] bg-[#F8F3EE] px-4 py-4">
             <div className="mb-3 flex items-center justify-between text-sm">
               <span className="font-medium text-[#4D4139]">Brightness</span>
-              <span className="font-semibold text-[#7E1F25]">{draftBrightness}</span>
+              <span className="font-semibold text-[#7E1F25]">Brightness {draftBrightness}%</span>
             </div>
             <input
               className="h-2 w-full cursor-pointer appearance-none rounded-full bg-[#E9DED2] accent-[#7E1F25]"
               disabled={busy}
-              max="255"
-              min="0"
+              max="100"
+              min="1"
               onChange={(event) => setDraftBrightness(Number(event.target.value))}
-              onMouseUp={() => onBrightnessCommit(draftBrightness)}
-              onTouchEnd={() => onBrightnessCommit(draftBrightness)}
+              onKeyUp={() => commitBrightness(draftBrightness)}
+              onMouseDown={beginBrightnessInteraction}
+              onMouseUp={() => commitBrightness(draftBrightness)}
+              onTouchEnd={() => commitBrightness(draftBrightness)}
+              onTouchStart={beginBrightnessInteraction}
+              step="1"
               type="range"
               value={draftBrightness}
             />
@@ -303,19 +477,43 @@ function LightControlPanel({
 
           <div className="mt-5">
             <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.2em] text-[#7E1F25]/60">Colors</p>
-            <div className="grid grid-cols-3 gap-3">
-              {presets.map((preset) => (
-                <motion.button
-                  key={preset.label}
-                  className="rounded-[1.2rem] border border-[#E8DED5] bg-[#FCFAF7] px-4 py-3 text-sm font-medium text-[#4D4139] shadow-sm"
-                  disabled={busy}
-                  onClick={() => onPresetSelect(preset.rgb, draftBrightness)}
-                  type="button"
-                  whileTap={{ scale: 0.985 }}
+            <div className="rounded-[1.6rem] border border-[#E8DED5] bg-[#FCFAF7] p-4 shadow-sm">
+              <div className="flex items-center justify-between gap-4">
+                <div className="flex-1">
+                  <p className="text-sm font-medium text-[#4D4139]">Color Wheel</p>
+                  <p className="mt-1 text-xs text-[#7B6C63]">Choose any tone and keep the current brightness.</p>
+                </div>
+                <div
+                  className="h-14 w-14 rounded-full border border-white/70 shadow-[0_10px_24px_rgba(126,31,37,0.18)]"
+                  style={{
+                    backgroundColor: previewColor,
+                    boxShadow: `0 0 0 6px rgba(255,255,255,0.85), 0 0 36px ${previewColor}55`,
+                  }}
+                />
+              </div>
+              <div className="mt-4 flex justify-center">
+                <div
+                  ref={colorWheelRef}
+                  className="relative h-44 w-44 cursor-pointer touch-none rounded-full pointer-events-auto"
+                  onPointerDown={busy ? undefined : handleColorWheelPointerDown}
+                  onPointerMove={busy ? undefined : handleColorWheelPointerMove}
+                  onPointerUp={busy ? undefined : handleColorWheelPointerUp}
+                  onPointerCancel={busy ? undefined : handleColorWheelPointerUp}
+                  style={{
+                    background:
+                      'radial-gradient(circle at center, #ffffff 0%, #ffffff 14%, rgba(255,255,255,0) 58%), conic-gradient(#ff0000, #ffff00, #00ff00, #00ffff, #0000ff, #ff00ff, #ff0000)',
+                  }}
                 >
-                  {preset.label}
-                </motion.button>
-              ))}
+                  <div className="absolute inset-0 rounded-full shadow-[inset_0_0_0_1px_rgba(126,31,37,0.08)]" />
+                  <div
+                    className="pointer-events-none absolute h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white shadow-[0_0_0_1px_rgba(126,31,37,0.14),0_8px_18px_rgba(26,26,26,0.16)]"
+                    style={{
+                      ...wheelIndicatorStyle,
+                      backgroundColor: previewColor,
+                    }}
+                  />
+                </div>
+              </div>
             </div>
           </div>
 
@@ -349,10 +547,11 @@ function HomeScreen({
   lightExpanded,
   lightState,
   onBrightnessCommit,
+  onHexColorCommit,
+  onInteractionChange,
   onLightExpandToggle,
   onLightPowerToggle,
   onOpenSos,
-  onPresetSelect,
   onSceneSelect,
   onToggle,
 }) {
@@ -411,9 +610,10 @@ function HomeScreen({
           expanded={lightExpanded}
           lightState={lightState}
           onBrightnessCommit={onBrightnessCommit}
+          onHexColorCommit={onHexColorCommit}
+          onInteractionChange={onInteractionChange}
           onExpandToggle={onLightExpandToggle}
           onPowerToggle={onLightPowerToggle}
-          onPresetSelect={onPresetSelect}
           onSceneSelect={onSceneSelect}
         />
       ) : null}
@@ -580,6 +780,7 @@ function AppLayout({ onLogout }) {
   const [lightBusy, setLightBusy] = useState(false);
   const [lightError, setLightError] = useState('');
   const [lightState, setLightState] = useState(null);
+  const lightInteractionRef = useRef(false);
 
   const applyLightState = (light) => {
     setLightState(light);
@@ -604,10 +805,13 @@ function AppLayout({ onLogout }) {
   useEffect(() => {
     let cancelled = false;
 
-    async function loadLightState() {
+    async function loadLightState({ silent = false } = {}) {
       try {
         const light = await getLightState();
         if (cancelled || !light) {
+          return;
+        }
+        if (lightInteractionRef.current && silent) {
           return;
         }
         setLightError('');
@@ -618,9 +822,13 @@ function AppLayout({ onLogout }) {
     }
 
     loadLightState();
+    const pollId = window.setInterval(() => {
+      loadLightState({ silent: true });
+    }, 2000);
 
     return () => {
       cancelled = true;
+      window.clearInterval(pollId);
     };
   }, []);
 
@@ -637,13 +845,35 @@ function AppLayout({ onLogout }) {
             setLightBusy(true);
             setLightError('');
             try {
-              const light = await setBrightness(TAPO_LIGHT_ENTITY_ID, brightness);
+              const light = await setBrightness(
+                TAPO_LIGHT_ENTITY_ID,
+                uiToHaBrightness(brightness),
+              );
               applyLightState(light);
             } catch (error) {
               setLightError(error.message || 'Brightness update failed.');
             } finally {
               setLightBusy(false);
             }
+          }}
+          onHexColorCommit={async (_hex, rgb, brightness) => {
+            setLightBusy(true);
+            setLightError('');
+            try {
+              const light = await setColor(
+                TAPO_LIGHT_COLOR_ENTITY_ID,
+                rgb,
+                uiToHaBrightness(brightness),
+              );
+              applyLightState(light);
+            } catch (error) {
+              setLightError(error.message || 'Unable to update light color.');
+            } finally {
+              setLightBusy(false);
+            }
+          }}
+          onInteractionChange={(isInteracting) => {
+            lightInteractionRef.current = isInteracting;
           }}
           onLightExpandToggle={() => setLightExpanded((current) => !current)}
           onLightPowerToggle={async () => {
@@ -661,23 +891,11 @@ function AppLayout({ onLogout }) {
             }
           }}
           onOpenSos={() => setActiveTab('sos')}
-          onPresetSelect={async (rgb, brightness) => {
-            setLightBusy(true);
-            setLightError('');
-            try {
-              const light = await setColor(TAPO_LIGHT_ENTITY_ID, rgb, brightness);
-              applyLightState(light);
-            } catch (error) {
-              setLightError(error.message || 'Unable to update light color.');
-            } finally {
-              setLightBusy(false);
-            }
-          }}
           onSceneSelect={async (scene) => {
             setLightBusy(true);
             setLightError('');
             try {
-              const light = await setScene(TAPO_LIGHT_ENTITY_ID, scene);
+              const light = await setScene(TAPO_LIGHT_COLOR_ENTITY_ID, scene);
               applyLightState(light);
             } catch (error) {
               setLightError(error.message || 'Unable to apply the selected scene.');

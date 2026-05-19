@@ -15,6 +15,62 @@ let cachedDevice;
 let cachedCloudApi;
 let cachedMeta;
 
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function uiToHaBrightness(value) {
+  return clamp(Math.round((clamp(Number(value) || 1, 1, 100) / 100) * 255), 1, 255);
+}
+
+function haToUiBrightness(value) {
+  return clamp(Math.round((clamp(Number(value) || 1, 1, 255) / 255) * 100), 1, 100);
+}
+
+function hsvToRgb(hue, saturation, value = 100) {
+  if (
+    typeof hue !== 'number' ||
+    typeof saturation !== 'number' ||
+    Number.isNaN(hue) ||
+    Number.isNaN(saturation)
+  ) {
+    return null;
+  }
+
+  const normalizedHue = ((hue % 360) + 360) % 360;
+  const s = clamp(saturation, 0, 100) / 100;
+  const v = clamp(value, 0, 100) / 100;
+  const chroma = v * s;
+  const x = chroma * (1 - Math.abs(((normalizedHue / 60) % 2) - 1));
+  const match = v - chroma;
+
+  let red = 0;
+  let green = 0;
+  let blue = 0;
+
+  if (normalizedHue < 60) {
+    red = chroma;
+    green = x;
+  } else if (normalizedHue < 120) {
+    red = x;
+    green = chroma;
+  } else if (normalizedHue < 180) {
+    green = chroma;
+    blue = x;
+  } else if (normalizedHue < 240) {
+    green = x;
+    blue = chroma;
+  } else if (normalizedHue < 300) {
+    red = x;
+    blue = chroma;
+  } else {
+    red = chroma;
+    blue = x;
+  }
+
+  return [red, green, blue].map((channel) => Math.round((channel + match) * 255));
+}
+
 function requireConfig() {
   if (!TAPO_EMAIL || !TAPO_PASSWORD) {
     const error = new Error('Missing Tapo credentials. Set TAPO_EMAIL and TAPO_PASSWORD in your environment.');
@@ -100,20 +156,27 @@ export async function getLightState() {
   const device = await getDeviceConnection();
   const info = await device.getDeviceInfo();
   const meta = cachedMeta || {};
+  const uiBrightness =
+    typeof info.brightness === 'number' ? clamp(Math.round(info.brightness), 1, 100) : null;
+  const rgb = hsvToRgb(info.hue, info.saturation, 100);
 
   return {
     alias: normalizeDeviceLabel({ ...meta, ...info }),
-    brightness: typeof info.brightness === 'number' ? info.brightness : null,
+    brightness: uiBrightness,
     color: {
       colorTemp: typeof info.color_temp === 'number' ? info.color_temp : null,
       hue: typeof info.hue === 'number' ? info.hue : null,
       saturation: typeof info.saturation === 'number' ? info.saturation : null,
     },
     deviceId: info.device_id || meta.deviceId || null,
+    entityId: process.env.TAPO_LIGHT_ENTITY || 'light.tapo_l530',
+    haBrightness: uiBrightness ? uiToHaBrightness(uiBrightness) : null,
+    hex: rgbToHex(rgb),
     ip: info.ip || meta.ip || TAPO_DEVICE_IP || null,
     model: info.model || meta.deviceModel || null,
     online: true,
     power: Boolean(info.device_on),
+    rgb,
     raw: info,
   };
 }
@@ -135,7 +198,10 @@ export async function toggleLight(forceState) {
 export async function setLightBrightness(brightness) {
   const device = await getDeviceConnection();
   const numeric = Number(brightness);
-  const normalized = numeric > 100 ? Math.round((Math.max(0, Math.min(255, numeric)) / 255) * 100) : Math.max(1, Math.min(100, numeric));
+  const normalized =
+    numeric > 100
+      ? haToUiBrightness(clamp(numeric, 1, 255))
+      : clamp(Math.round(numeric), 1, 100);
 
   await device.turnOn();
   await device.setBrightness(normalized);
@@ -144,8 +210,12 @@ export async function setLightBrightness(brightness) {
 }
 
 function rgbToHex(rgb) {
+  if (!Array.isArray(rgb) || rgb.length !== 3) {
+    return null;
+  }
+
   return `#${rgb
-    .map((value) => Math.max(0, Math.min(255, Number(value))).toString(16).padStart(2, '0'))
+    .map((value) => clamp(Number(value) || 0, 0, 255).toString(16).padStart(2, '0'))
     .join('')}`;
 }
 
@@ -156,8 +226,8 @@ export async function setLightColor(rgb, brightness) {
   if (typeof brightness === 'number') {
     await device.setBrightness(
       brightness > 100
-        ? Math.round((Math.max(0, Math.min(255, brightness)) / 255) * 100)
-        : Math.max(1, Math.min(100, brightness)),
+        ? haToUiBrightness(clamp(brightness, 1, 255))
+        : clamp(Math.round(brightness), 1, 100),
     );
   }
   await device.setColour(rgbToHex(rgb));

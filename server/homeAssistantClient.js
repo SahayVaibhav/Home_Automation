@@ -6,10 +6,34 @@ const {
   HOME_ASSISTANT_TOKEN,
   HOME_ASSISTANT_URL = 'http://localhost:8123',
   TAPO_LIGHT_ENTITY = 'light.tapo_l530',
+  TAPO_LIGHT_OFF_ENTITY = 'tapo_l530_smooth_off',
+  TAPO_LIGHT_ON_ENTITY = 'tapo_l530_smooth_on',
 } = process.env;
 
 export function hasHomeAssistantConfig() {
   return Boolean(HOME_ASSISTANT_URL && HOME_ASSISTANT_TOKEN);
+}
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function haToUiBrightness(value) {
+  if (typeof value !== 'number' || Number.isNaN(value)) {
+    return null;
+  }
+
+  return clamp(Math.round((clamp(value, 1, 255) / 255) * 100), 1, 100);
+}
+
+function rgbToHex(rgb) {
+  if (!Array.isArray(rgb) || rgb.length !== 3) {
+    return null;
+  }
+
+  return `#${rgb
+    .map((value) => clamp(Number(value) || 0, 0, 255).toString(16).padStart(2, '0'))
+    .join('')}`;
 }
 
 function requireHomeAssistantConfig() {
@@ -24,6 +48,14 @@ function requireHomeAssistantConfig() {
 
 function buildUrl(path) {
   return `${HOME_ASSISTANT_URL.replace(/\/$/, '')}${path}`;
+}
+
+function normalizeEntityId(entityId, defaultDomain = 'light') {
+  if (typeof entityId !== 'string' || !entityId.trim()) {
+    return null;
+  }
+
+  return entityId.includes('.') ? entityId : `${defaultDomain}.${entityId}`;
 }
 
 async function homeAssistantRequest(path, options = {}) {
@@ -51,16 +83,20 @@ async function homeAssistantRequest(path, options = {}) {
 
 function normalizeLightState(state) {
   const attributes = state.attributes || {};
+  const haBrightness = typeof attributes.brightness === 'number' ? clamp(attributes.brightness, 1, 255) : null;
+  const rgb = Array.isArray(attributes.rgb_color) ? attributes.rgb_color : null;
 
   return {
     alias: attributes.friendly_name || state.entity_id,
     available: state.state !== 'unavailable',
-    brightness: typeof attributes.brightness === 'number' ? attributes.brightness : 0,
+    brightness: haToUiBrightness(haBrightness),
     colorMode: attributes.color_mode || null,
     entityId: state.entity_id,
+    haBrightness,
+    hex: rgbToHex(rgb),
     online: state.state !== 'unavailable',
     power: state.state === 'on',
-    rgb: Array.isArray(attributes.rgb_color) ? attributes.rgb_color : null,
+    rgb,
     raw: state,
   };
 }
@@ -80,6 +116,28 @@ async function callLightService(service, payload) {
   });
 }
 
+async function callEntityService(entityId, defaultDomain = 'script') {
+  const normalizedEntityId = normalizeEntityId(entityId, defaultDomain);
+  if (!normalizedEntityId) {
+    const error = new Error('Missing Home Assistant entity id.');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const [domain] = normalizedEntityId.split('.');
+  const service =
+    domain === 'button'
+      ? 'press'
+      : domain === 'automation'
+        ? 'trigger'
+        : 'turn_on';
+
+  await homeAssistantRequest(`/api/services/${domain}/${service}`, {
+    body: JSON.stringify({ entity_id: normalizedEntityId }),
+    method: 'POST',
+  });
+}
+
 export async function turnLightOn(entityId = TAPO_LIGHT_ENTITY) {
   await callLightService('turn_on', { entity_id: entityId });
   return getLightState(entityId);
@@ -90,8 +148,18 @@ export async function turnLightOff(entityId = TAPO_LIGHT_ENTITY) {
   return getLightState(entityId);
 }
 
+export async function triggerSmoothLightOn(targetEntityId = TAPO_LIGHT_ENTITY) {
+  await callEntityService(TAPO_LIGHT_ON_ENTITY, 'script');
+  return getLightState(targetEntityId);
+}
+
+export async function triggerSmoothLightOff(targetEntityId = TAPO_LIGHT_ENTITY) {
+  await callEntityService(TAPO_LIGHT_OFF_ENTITY, 'script');
+  return getLightState(targetEntityId);
+}
+
 export async function setLightBrightness(entityId = TAPO_LIGHT_ENTITY, brightness) {
-  const normalized = Math.max(0, Math.min(255, Number(brightness)));
+  const normalized = clamp(Number(brightness), 1, 255);
   await callLightService('turn_on', {
     brightness: normalized,
     entity_id: entityId,
@@ -106,7 +174,7 @@ export async function setLightColor(entityId = TAPO_LIGHT_ENTITY, rgb, brightnes
   };
 
   if (typeof brightness === 'number') {
-    payload.brightness = Math.max(0, Math.min(255, Number(brightness)));
+    payload.brightness = clamp(Number(brightness), 1, 255);
   }
 
   await callLightService('turn_on', payload);
